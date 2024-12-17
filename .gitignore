@@ -1,0 +1,7 @@
+.venv
+login.*
+out.*
+*.out
+db
+.idea
+js-scratch-shoo
