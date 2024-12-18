@@ -32,7 +32,7 @@ with open("login.json", "r") as file:
 if os.path.exists('./db/scratchdisk.json'):
     with open('./db/scratchdisk.json', 'r') as file:
         scratch = json.load(file)
-        edited_sysprompt: str = scratch["working_prompt"]
+        edited_sysprompt: str = scratch["edited_prompt"]
 else:
     edited_sysprompt: str = login["default_prompt"]
 
@@ -71,6 +71,12 @@ while True:
 
                     # parse in details
                     sender_name, sender, *_ = msg.from_[0]
+
+                    if msg.reply_to and len(msg.reply_to) > 0:
+                        reply_to = msg.reply_to[0]
+                        if len(reply_to[1]) > 0:
+                            sender_name, sender, *_ = reply_to
+
                     subject: str = msg.subject if msg.subject else "No subject"
                     body_lines: list[str] = []
 
@@ -101,7 +107,7 @@ while True:
                         with open(f'./db/{encoded}.json', 'r') as file:
                             j = json.load(file)
                             history_load = j["history"]
-                            use_edited_sysprompt = j["edited_prompt"]
+                            use_edited_sysprompt = j["use_edited_sysprompt"]
                     else:
                         history_load = []
                         #true or false random choice, or if theres no scratchdisk to pull working prompt from
@@ -161,19 +167,17 @@ while True:
                     # we dont want it to be saved, or processed in the self tuning
                     del history[0]
 
-                    #TODO: remove True and actually write to the scratchdisk file
-                    if True: #not history[-2]["tuned"]:
+                    tuned: bool = False
+                    #dont overdo it maybe
+                    if len(history) > 2 and not history[-2]["tuned"]:
+                        tuned = True
+
+                        #format for llm
                         history_concat: str = ""
                         for m in history:
                             history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
 
-                        # tune_prompt: str = (f"I need help writing the system prompt for my LLM chatbot, can you help me?"
-                        #                     f"given the following LLM chat history, what could be added to this system prompt that is "
-                        #                     f"applicable to different conversations with different users that fits the "
-                        #                     f"original system prompts intentions? Output only the new system prompt with your additions."
-                        #                     f" The current system prompt is '{edited_sysprompt}' and the chat history is \n" + history_concat)
-
-
+                        #prompt the llm
                         res: ChatResponse = chat(model=login["model"], messages=[
                             {
                                 "role": "system",
@@ -187,11 +191,22 @@ while True:
                             }
                         ])
 
-                        print(res.message.content)
+                        #parse
+                        tune_response: str = str(res.message.content)
+                        split_tune_response: list[str] = tune_response.split('"')
+
+                        # usually 'heres ... "system response" this does...'
+                        if len(split_tune_response) > 2:
+                            edited_sysprompt = split_tune_response[1]
+                            with open(f'./db/scratchdisk.json', 'w') as file:
+                                json.dump({"edited_prompt": edited_sysprompt}, file)
+
 
                     history.append({
                         "role": "assistant",
-                        "content": response,
+                        "content": response_body,
+                        "tuned": tuned,
+                        "system_prompt": sysprompt,
                     })
 
                     with open(f'./db/{encoded}.json', 'w', encoding="utf-8") as file:
