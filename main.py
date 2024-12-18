@@ -15,7 +15,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import imaplib
-import email
 from time import sleep
 from ollama import chat
 from ollama import ChatResponse
@@ -122,12 +121,14 @@ while True:
                     history = [
                                   {
                             "role": "system",
-                            "content": sysprompt
+                            "content": sysprompt,
+                            "tuned": True,
                         }
                     ] + history_load + [
                         {
                             "role": "user",
-                            "content": body
+                            "content": body,
+                            "tuned": False,
                         }
                     ]
 
@@ -156,6 +157,24 @@ while True:
                         print("Email sent successfully!")
                     except Exception as e:
                         print(f"Error: {e}")
+
+                    #TODO: remove True and actually write to the scratchdisk file
+                    if True: #not history[-2]["tuned"]:
+                        history_concat: str = ""
+                        for m in history:
+                            history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
+
+                        tune_prompt: str = ("given the following LLM chat history, what would be a system prompt that "
+                                            "fits the original system prompts intentions? output the new system prompt "
+                                            "and nothing else.\n" + history_concat)
+
+
+                        res: ChatResponse = chat(model=login["model"], messages=[{
+                            "role": "user",
+                            "content": tune_prompt,
+                        }])
+
+                        print(res.message.content)
 
                     history.append({
                         "role": "assistant",
