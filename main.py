@@ -10,6 +10,7 @@ https://github.com/jjj333-p/email-llama/
 import base64
 import json
 import os
+import random
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -27,6 +28,14 @@ if not os.path.exists('./db/'):
 # Email details
 with open("login.json", "r") as file:
     login = json.load(file)
+
+# try to read in scratchdisk
+if os.path.exists('./db/scratchdisk.json'):
+    with open('./db/scratchdisk.json', 'r') as file:
+        scratch = json.load(file)
+        edited_sysprompt: str = scratch["working_prompt"]
+else:
+    edited_sysprompt: str = ""
 
 run: int = 0
 
@@ -62,7 +71,7 @@ while True:
                         continue
 
                     # parse in details
-                    sender: str = msg.from_[0][1]
+                    sender_name, sender, *_ = msg.from_[0]
                     subject: str = msg.subject if msg.subject else "No subject"
                     body_lines: list[str] = []
 
@@ -88,51 +97,46 @@ while True:
                     encoded: str = base64.urlsafe_b64encode(
                         f'{sender} {" ".join(subject_by_words)}'.encode()).decode()
 
-                    # attempt to parse out what model to use
-                    model: str = login["default_model"]
-                    default_model: bool = True
-                    if subject_by_words[0] in login["permitted_models"]:
-                        model = subject_by_words[0]
-                        default_model = False
-                        del subject_by_words[0]
-
-                    system_prompt: dict[str, str] = {
-                        "role": "system",
-                        "content": " ".join(subject_by_words),
-                    }
-                    history: list[dict[str, str]] = [system_prompt]
-
-                    # read in history from disk
+                    # read in history from disk, or emplace default
                     if os.path.exists(f'./db/{encoded}.json'):
                         with open(f'./db/{encoded}.json', 'r') as file:
-                            json_data = json.load(file)
-                            for i, entry in enumerate(json_data):
+                            j = json.load(file)
+                            history_load = j["history"]
+                            use_edited_sysprompt = j["edited_prompt"]
+                    else:
+                        history_load = []
+                        #true or false random choice, or if theres no scratchdisk to pull working prompt from
+                        if random.randint(1,0) or not os.path.exists('./db/scratchdisk.json'):
+                            use_edited_sysprompt = False
+                            # sysprompt = login["default_prompt"]
+                        else:
+                            use_edited_sysprompt = True
 
-                                # first item is duplicate system prompt
-                                if i == 0:
-                                    continue
+                    if use_edited_sysprompt:
+                        sysprompt: str = edited_sysprompt
+                    else:
+                        sysprompt: str = login["default_prompt"]
 
-                                history.append(entry)
+                    sysprompt += f'\nThe subject is "{" ".join(subject_by_words)}" sent by {sender_name} <{sender}>'
 
-                    # add latest user prompt
-                    history.append({
-                        "role": "user",
-                        "content": body
-                    })
+                    history = [
+                                  {
+                            "role": "system",
+                            "content": sysprompt
+                        }
+                    ] + history_load + [
+                        {
+                            "role": "user",
+                            "content": body
+                        }
+                    ]
 
                     # compute response
-                    response: str = ""
                     try:
-                        cr: ChatResponse = chat(model=model, messages=history)
-                        response = cr.message.content
+                        cr: ChatResponse = chat(model=login["model"], messages=history)
+                        response_body = cr.message.content
                     except Exception as e:
-                        response = str(e)
-
-                    # parse out relevant model
-                    response_body: str = f''
-                    if default_model:
-                        response_body = f'{subject_by_words[0]} not a permitted model, using default model {model}.\n\n'
-                    response_body += response
+                        response_body = str(e)
 
                     # create email object
                     response_message = MIMEMultipart()
@@ -159,7 +163,11 @@ while True:
                     })
 
                     with open(f'./db/{encoded}.json', 'w', encoding="utf-8") as file:
-                        json.dump(history, file, indent=4)
+                        j = {
+                            "use_edited_sysprompt": use_edited_sysprompt,
+                            "history": history,
+                        }
+                        json.dump(j, file, indent=4)
 
         mail.logout()
     except Exception as e:
