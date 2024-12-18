@@ -5,7 +5,7 @@ This code is licensed under the A-GPL 3.0 license found both in the "LICENSE" fi
 as well as https://www.gnu.org/licenses/agpl-3.0.en.html. Read it to know your rights.
 
 A complete copy of this codebase as well as runtime instructions can be found at
-https://github.com/jjj333-p/email-llama/
+https://github.com/jjj333-p/llama-scambait/
 """
 import base64
 import json
