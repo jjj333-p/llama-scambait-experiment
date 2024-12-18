@@ -34,7 +34,7 @@ if os.path.exists('./db/scratchdisk.json'):
         scratch = json.load(file)
         edited_sysprompt: str = scratch["working_prompt"]
 else:
-    edited_sysprompt: str = ""
+    edited_sysprompt: str = login["default_prompt"]
 
 run: int = 0
 
@@ -66,7 +66,7 @@ while True:
                     msg = mailparser.parse_from_bytes(response[1])
 
                     # sanity checks
-                    if len(msg.from_) < 1 or len(msg.from_[0]) < 12:
+                    if len(msg.from_) < 1 or len(msg.from_[0]) < 2:
                         continue
 
                     # parse in details
@@ -105,7 +105,7 @@ while True:
                     else:
                         history_load = []
                         #true or false random choice, or if theres no scratchdisk to pull working prompt from
-                        if random.randint(1,0) or not os.path.exists('./db/scratchdisk.json'):
+                        if random.randint(0,1) or not os.path.exists('./db/scratchdisk.json'):
                             use_edited_sysprompt = False
                             # sysprompt = login["default_prompt"]
                         else:
@@ -135,9 +135,9 @@ while True:
                     # compute response
                     try:
                         cr: ChatResponse = chat(model=login["model"], messages=history)
-                        response_body = cr.message.content
+                        response_body: str = str(cr.message.content)
                     except Exception as e:
-                        response_body = str(e)
+                        response_body: str = str(e)
 
                     # create email object
                     response_message = MIMEMultipart()
@@ -158,21 +158,34 @@ while True:
                     except Exception as e:
                         print(f"Error: {e}")
 
+                    # we dont want it to be saved, or processed in the self tuning
+                    del history[0]
+
                     #TODO: remove True and actually write to the scratchdisk file
                     if True: #not history[-2]["tuned"]:
                         history_concat: str = ""
                         for m in history:
                             history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
 
-                        tune_prompt: str = ("given the following LLM chat history, what would be a system prompt that "
-                                            "fits the original system prompts intentions? output the new system prompt "
-                                            "and nothing else.\n" + history_concat)
+                        # tune_prompt: str = (f"I need help writing the system prompt for my LLM chatbot, can you help me?"
+                        #                     f"given the following LLM chat history, what could be added to this system prompt that is "
+                        #                     f"applicable to different conversations with different users that fits the "
+                        #                     f"original system prompts intentions? Output only the new system prompt with your additions."
+                        #                     f" The current system prompt is '{edited_sysprompt}' and the chat history is \n" + history_concat)
 
 
-                        res: ChatResponse = chat(model=login["model"], messages=[{
-                            "role": "user",
-                            "content": tune_prompt,
-                        }])
+                        res: ChatResponse = chat(model=login["model"], messages=[
+                            {
+                                "role": "system",
+                                "content": "Given the provided system prompt and LLM chat logs, concisely edit with few-shot prompting and add to the system prompt that will have better output for future different conversations about different topics.",
+                            }, {
+                                "role": "user",
+                                "content": f'the system prompt is "{edited_sysprompt}"',
+                            }, {
+                                "role": "user",
+                                "content": f'the Chat Logs are as follows:\n{history_concat}',
+                            }
+                        ])
 
                         print(res.message.content)
 
