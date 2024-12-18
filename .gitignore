@@ -5,3 +5,4 @@ out.*
 db
 .idea
 js-scratch-shoo
+__pycache__
