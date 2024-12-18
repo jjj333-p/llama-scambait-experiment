@@ -15,7 +15,9 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import imaplib
-from time import sleep
+from time import sleep, time
+import re
+
 from ollama import chat
 from ollama import ChatResponse
 import mailparser
@@ -39,182 +41,187 @@ else:
 run: int = 0
 
 while True:
-    print("run", run)
+    print("starting run", run)
     run += 1
+
+    start_time = time()
 
     try:
         # Connect to the server
         mail = imaplib.IMAP4_SSL(login["imap_addr"], login["imap_port"])
         mail.login(login["email"].split("@")[0], login["password"])
 
-        # Select the mailbox you want to use
-        mail.select("INBOX")
+        for box in ["INBOX", "Junk"]:
 
-        # Search for new emails
-        status, messages = mail.search(None, "UNSEEN")
-        email_ids = messages[0].split()
+            # Select the mailbox you want to use
+            mail.select(box)
 
-        # fetch email ids we just searched for
-        for num in email_ids:
-            typ, data = mail.fetch(num, '(RFC822)')
+            # Search for new emails
+            _status, messages = mail.search(None, "UNSEEN")
+            email_ids = messages[0].split()
 
-            # no idea why a message id returns a list but okay
-            for response in data:
+            # fetch email ids we just searched for
+            for num in email_ids:
+                typ, data = mail.fetch(num, '(RFC822)')
 
-                # everything does this, i have no idea
-                if isinstance(response, tuple):
-                    msg = mailparser.parse_from_bytes(response[1])
+                # no idea why a message id returns a list but okay
+                for response in data:
 
-                    # sanity checks
-                    if len(msg.from_) < 1 or len(msg.from_[0]) < 2:
-                        continue
+                    # everything does this, i have no idea
+                    if isinstance(response, tuple):
+                        msg = mailparser.parse_from_bytes(response[1])
 
-                    # parse in details
-                    sender_name, sender, *_ = msg.from_[0]
+                        # sanity checks
+                        if len(msg.from_) < 1 or len(msg.from_[0]) < 2:
+                            continue
 
-                    if msg.reply_to and len(msg.reply_to) > 0:
-                        reply_to = msg.reply_to[0]
-                        if len(reply_to[1]) > 0:
-                            sender_name, sender, *_ = reply_to
+                        # parse in details
+                        sender_name, sender, *_ = msg.from_[0]
 
-                    subject: str = msg.subject if msg.subject else "No subject"
-                    body_lines: list[str] = []
+                        # this can only be internal messages
+                        if sender is None or len(sender) < 5:
+                            continue
 
-                    # rid of the replies, rely on stored content for that
-                    for line in msg.text_plain[0].splitlines():
-                        if login["email"].split("@")[0] in line or login["displayname"] in line or line.startswith(
-                                "> "):
-                            break
+                        if msg.reply_to and len(msg.reply_to) > 0:
+                            reply_to = msg.reply_to[0]
+                            if len(reply_to[1]) > 0:
+                                sender_name, sender, *_ = reply_to
+
+                        subject: str = msg.subject if msg.subject else "No subject"
+                        body_lines: list[str] = []
+
+                        # rid of the replies, rely on stored content for that
+                        for line in msg.text_plain[0].splitlines():
+                            if login["email"].split("@")[0] in line or login["displayname"] in line or line.startswith(
+                                    "> "):
+                                break
+                            else:
+                                body_lines.append(line)
+
+                        body: str = "\r\n".join(body_lines)
+
+                        print("From:", sender)
+                        print("Subject:", subject)
+                        print("Body:", body)
+
+                        subject_by_words: list[str] = subject.split()
+
+                        # messages will be stored by base64 hash of subject
+                        if subject_by_words[0] == "Re:" or subject_by_words[0] == "re:" or subject_by_words[0] == "RE:":
+                            del subject_by_words[0]
+                        encoded: str = re.sub(r"^[ .]|[/<>:\"\\|?*]+|[ .]$", "_", sender )
+
+                        # read in history from disk, or emplace default
+                        if os.path.exists(f'./db/{encoded}.json'):
+                            with open(f'./db/{encoded}.json', 'r') as file:
+                                j = json.load(file)
+                                history_load = j["history"]
+                                use_edited_sysprompt = j["use_edited_sysprompt"]
                         else:
-                            body_lines.append(line)
+                            history_load = []
+                            #true or false random choice
+                            use_edited_sysprompt = bool(random.randint(0,1))
 
-                    body: str = "\r\n".join(body_lines)
-
-                    print("From:", sender)
-                    print("Subject:", subject)
-                    print("Body:", body)
-
-                    subject_by_words: list[str] = subject.split()
-
-                    # messages will be stored by base64 hash of subject
-                    if subject_by_words[0] == "Re:" or subject_by_words[0] == "re:" or subject_by_words[0] == "RE:":
-                        del subject_by_words[0]
-                    encoded: str = base64.urlsafe_b64encode(
-                        f'{sender} {" ".join(subject_by_words)}'.encode()).decode()
-
-                    # read in history from disk, or emplace default
-                    if os.path.exists(f'./db/{encoded}.json'):
-                        with open(f'./db/{encoded}.json', 'r') as file:
-                            j = json.load(file)
-                            history_load = j["history"]
-                            use_edited_sysprompt = j["use_edited_sysprompt"]
-                    else:
-                        history_load = []
-                        #true or false random choice, or if theres no scratchdisk to pull working prompt from
-                        if random.randint(0,1) or not os.path.exists('./db/scratchdisk.json'):
-                            use_edited_sysprompt = False
-                            # sysprompt = login["default_prompt"]
+                        if use_edited_sysprompt:
+                            sysprompt: str = edited_sysprompt
                         else:
-                            use_edited_sysprompt = True
+                            sysprompt: str = login["default_prompt"]
 
-                    if use_edited_sysprompt:
-                        sysprompt: str = edited_sysprompt
-                    else:
-                        sysprompt: str = login["default_prompt"]
+                        sysprompt += f'\nThe subject is "{" ".join(subject_by_words)}" sent by {sender_name} <{sender}>'
 
-                    sysprompt += f'\nThe subject is "{" ".join(subject_by_words)}" sent by {sender_name} <{sender}>'
-
-                    history = [
-                                  {
-                            "role": "system",
-                            "content": sysprompt,
-                            "tuned": True,
-                        }
-                    ] + history_load + [
-                        {
-                            "role": "user",
-                            "content": body,
-                            "tuned": False,
-                        }
-                    ]
-
-                    # compute response
-                    try:
-                        cr: ChatResponse = chat(model=login["model"], messages=history)
-                        response_body: str = str(cr.message.content)
-                    except Exception as e:
-                        response_body: str = str(e)
-
-                    # create email object
-                    response_message = MIMEMultipart()
-                    response_message["From"] = login["email"]
-                    response_message["To"] = sender
-                    if subject.startswith("Re:"):
-                        response_message["Subject"] = subject
-                    else:
-                        response_message["Subject"] = f"Re:{subject}"
-                    response_message.attach(MIMEText(response_body, "plain"))
-
-                    # send email
-                    try:
-                        with smtplib.SMTP_SSL(login["smtp_addr"], login["smtp_port"]) as server:
-                            server.login(login["email"].split('@')[0], login["password"])
-                            server.send_message(response_message)
-                        print("Email sent successfully!")
-                    except Exception as e:
-                        print(f"Error: {e}")
-
-                    # we dont want it to be saved, or processed in the self tuning
-                    del history[0]
-
-                    tuned: bool = False
-                    #dont overdo it maybe
-                    if len(history) > 2 and not history[-2]["tuned"]:
-                        tuned = True
-
-                        #format for llm
-                        history_concat: str = ""
-                        for m in history:
-                            history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
-
-                        #prompt the llm
-                        res: ChatResponse = chat(model=login["model"], messages=[
-                            {
+                        history = [
+                                      {
                                 "role": "system",
-                                "content": "Given the provided system prompt and LLM chat logs, concisely edit with few-shot prompting and add to the system prompt that will have better output for future different conversations about different topics.",
-                            }, {
-                                "role": "user",
-                                "content": f'the system prompt is "{edited_sysprompt}"',
-                            }, {
-                                "role": "user",
-                                "content": f'the Chat Logs are as follows:\n{history_concat}',
+                                "content": sysprompt,
+                                "tuned": True,
                             }
-                        ])
+                        ] + history_load + [
+                            {
+                                "role": "user",
+                                "content": body,
+                                "tuned": False,
+                            }
+                        ]
 
-                        #parse
-                        tune_response: str = str(res.message.content)
-                        split_tune_response: list[str] = tune_response.split('"')
+                        # compute response
+                        try:
+                            cr: ChatResponse = chat(model=login["model"], messages=history)
+                            response_body: str = str(cr.message.content)
+                        except Exception as e:
+                            response_body: str = str(e)
 
-                        # usually 'heres ... "system response" this does...'
-                        if len(split_tune_response) > 2:
-                            edited_sysprompt = split_tune_response[1]
-                            with open(f'./db/scratchdisk.json', 'w') as file:
-                                json.dump({"edited_prompt": edited_sysprompt}, file)
+                        # create email object
+                        response_message = MIMEMultipart()
+                        response_message["From"] = login["email"]
+                        response_message["To"] = sender
+                        if subject.startswith("Re:"):
+                            response_message["Subject"] = subject
+                        else:
+                            response_message["Subject"] = f"Re:{subject}"
+                        response_message.attach(MIMEText(response_body, "plain"))
+
+                        # send email
+                        try:
+                            with smtplib.SMTP_SSL(login["smtp_addr"], login["smtp_port"]) as server:
+                                server.login(login["email"].split('@')[0], login["password"])
+                                server.send_message(response_message)
+                            print("Email sent successfully!")
+                        except Exception as e:
+                            print(f"Error: {e}")
+
+                        # we dont want it to be saved, or processed in the self tuning
+                        del history[0]
+
+                        tuned: bool = False
+                        #dont overdo it maybe
+                        if use_edited_sysprompt and len(history) > 2 and not history[-2]["tuned"]:
+                            tuned = True
+
+                            #format for llm
+                            history_concat: str = ""
+                            for m in history:
+                                history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
+
+                            #prompt the llm
+                            res: ChatResponse = chat(model=login["model"], messages=[
+                                {
+                                    "role": "system",
+                                    "content": "Given the provided system prompt and LLM chat logs, concisely edit and add to the system prompt that will have better output for future different conversations about different topics.",
+                                }, {
+                                    "role": "user",
+                                    "content": f'the system prompt is "{edited_sysprompt}"',
+                                }, {
+                                    "role": "user",
+                                    "content": f'the Chat Logs are as follows:\n{history_concat}',
+                                }
+                            ])
+
+                            #parse
+                            tune_response: str = str(res.message.content)
+                            split_tune_response: list[str] = tune_response.split('"')
+
+                            print(tune_response)
+
+                            # usually 'heres ... "system response" this does...'
+                            if len(split_tune_response) > 2:
+                                edited_sysprompt = split_tune_response[1]
+                                with open(f'./db/scratchdisk.json', 'w') as file:
+                                    json.dump({"edited_prompt": edited_sysprompt}, file)
 
 
-                    history.append({
-                        "role": "assistant",
-                        "content": response_body,
-                        "tuned": tuned,
-                        "system_prompt": sysprompt,
-                    })
+                        history.append({
+                            "role": "assistant",
+                            "content": response_body,
+                            "tuned": tuned,
+                            "system_prompt": sysprompt,
+                        })
 
-                    with open(f'./db/{encoded}.json', 'w', encoding="utf-8") as file:
-                        j = {
-                            "use_edited_sysprompt": use_edited_sysprompt,
-                            "history": history,
-                        }
-                        json.dump(j, file, indent=4)
+                        with open(f'./db/{encoded}.json', 'w', encoding="utf-8") as file:
+                            j = {
+                                "use_edited_sysprompt": use_edited_sysprompt,
+                                "history": history,
+                            }
+                            json.dump(j, file, indent=4)
 
         mail.logout()
     except Exception as e:
@@ -222,4 +229,7 @@ while True:
 
     # stop from raping my poor vps
     # stalwart is light, but it needs all the help it can get
-    sleep(30)
+    dur = time() - start_time
+    print(f'done run {run-1} in {dur} seconds')
+    if dur < 30:
+        sleep(30-dur)
