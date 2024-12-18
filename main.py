@@ -203,7 +203,7 @@ while True:
                             print(tune_response)
 
                             # usually 'heres ... "system response" this does...'
-                            if len(split_tune_response) > 2:
+                            if len(split_tune_response) > 2 and len(split_tune_response[1].split()) > 20:
                                 edited_sysprompt = split_tune_response[1]
                                 with open(f'./db/scratchdisk.json', 'w') as file:
                                     json.dump({"edited_prompt": edited_sysprompt}, file)
