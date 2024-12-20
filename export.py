@@ -32,7 +32,6 @@ length_to_parse: int = args.length*2
 # for debug
 print(f"Generating markdown file for all conversations of length {args.length} or more.")
 
-default_sysprompt: str = ""
 edited_sysprompt: str = ""
 
 with open("login.json") as file:
