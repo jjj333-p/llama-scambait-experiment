@@ -55,7 +55,8 @@ for file in Path("db").iterdir():
 
     # apparently python is happy to just write incomplete json
     try:
-        json_file = json.load(open(file))
+        with open(file) as jf:
+            json_file = json.load(jf)
     except Exception as e:
         print(f"Could not read {file} as JSON with error: {e}.")
         continue
