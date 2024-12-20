@@ -100,7 +100,7 @@ for email, conversation in conversations.items():
     # if sufficient conversation history
     if not conversation.get("history"):
         continue
-    if len(conversation["history"]) < length_to_parse:
+    if not len(conversation["history"]) > length_to_parse:
         continue
 
     # title email
