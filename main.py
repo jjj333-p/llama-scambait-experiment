@@ -184,7 +184,9 @@ while True:
 
                             #format for llm
                             history_concat: str = ""
-                            for m in history:
+
+                            #too much history will outweigh the system prompt and it just responds in kind
+                            for m in history[-4:] if len(history) > 4 else history:
                                 history_concat += f'{m["role"]}: {" ".join(m["content"].splitlines())}'
 
                             #prompt the llm
