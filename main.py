@@ -1,6 +1,8 @@
 """
 This code is provided on an as-is warranty-free basis by Joseph Winkie <jjj333.p.1325@gmail.com>
 
+This is the main code that interacts with the LLM and the email, and generates the new system prompt to test
+
 This code is licensed under the A-GPL 3.0 license found both in the "LICENSE" file of the root of this repository
 as well as https://www.gnu.org/licenses/agpl-3.0.en.html. Read it to know your rights.
 
@@ -21,6 +23,9 @@ import re
 from ollama import chat
 from ollama import ChatResponse
 import mailparser
+
+if __name__ != "__main__":
+    raise ImportError("This script should only be run directly and not imported.")
 
 # directory to store message history
 if not os.path.exists('./db/'):
